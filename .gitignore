@@ -1,0 +1,27 @@
+# OS / Editor
+.vscode/
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+
+# Node.js
+node_modules/
+npm-debug.log
+yarn-error.log
+.env
+
+# C++ Compiled Binaries
+*.out
+*.o
+*.exe
+*.dll
+*.so
+*.dylib
+build/
+bin/
+
+# Docker
+.docker/
