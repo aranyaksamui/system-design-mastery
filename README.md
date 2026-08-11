@@ -1,6 +1,6 @@
 # The Ultimate Computer Science, Backend & System Design Mastery
 
-This repository documents a strictly sequential learning path from absolute Computer Science fundamentals to Expert-level System Design. The curriculum is designed to ensure no advanced architecture is learned without first deeply understanding the underlying mechanics of the operating system, memory, and network (checkout notes/ at each sub-phase for the mechanics and concepts).
+This repository documents a strictly sequential learning path from absolute Computer Science fundamentals to Expert-level System Design. The curriculum is designed to ensure no advanced architecture is learned without first deeply understanding the underlying mechanics of the operating system, memory, and network (check out ```notes/``` at each sub-phase for the mechanics and concepts).
 
 ## Repository Structure
 
