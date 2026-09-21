@@ -164,3 +164,130 @@ This architecture makes Node.js **extremely fast for I/O tasks** because the sin
 However, if you put a heavy computation on the Call Stack (such as an infinite loop or encrypting a massive video file directly in JavaScript), **the single thread freezes**. If that happens, *all* subsequent incoming requests (even instant ones like `GET /health`) will be blocked until that heavy calculation completes.
 
 ***
+
+> **Let's say each function call when a network request arrives acquires 2 mb of the call stack and max size of the stack is 8 mb therefore it can handle 4 concurrent requests. What if 16 requests hit the server at the same time?**
+
+Your question touches on the exact boundary where many developers get confused about memory and execution: **the difference between the Call Stack, the Heap, and how concurrency actually works.**
+
+There is a fundamental misconception in the premise, but walking through it directly will clarify how Node.js actually handles those 16 simultaneous requests.
+
+
+### The Fundamental Misconception
+
+In Node.js, **multiple requests do *not* share or stack up on the Call Stack together.**
+
+Because Node.js runs on a single main thread, the Call Stack executes **only one request at any given microsecond**.
+
+```
+❌ WRONG MENTAL MODEL (Requests stacking on top of each other):
+|-------------------|
+| Request 4         | (2 MB)
+| Request 3         | (2 MB)
+| Request 2         | (2 MB)
+| Request 1         | (2 MB) -> Total 8 MB (Stack full, crash!)
+|-------------------|
+
+✔ ACTUAL NODE.JS MODEL (Requests run serially, one by one):
+Call Stack: [ Req 1 runs ] -> pops off -> [ Req 2 runs ] -> pops off ...
+```
+
+Two key reasons explain why this happens:
+
+#### 1. The Call Stack only tracks *execution frames*, not your data
+
+* The **Call Stack** does not hold large data (like 2 MB objects, database rows, or JSON files). It only holds function pointers, return addresses, and tiny local references (around a few bytes).
+* The default maximum Call Stack size in V8 is actually only **~1 MB total**. If a single function actually consumed 2 MB of stack frame, Node would crash immediately with `RangeError: Maximum call stack size exceeded`.
+* Your request's 2 MB of data (objects, arrays, strings) lives in the **Heap** (dynamic memory), where Node.js typically has **2 GB to 4 GB** of space available.
+
+#### 2. Functions leave the Call Stack immediately when they go asynchronous
+
+* When Request 1 arrives and triggers a database query (`await prisma.user.find(...)`), **Request 1 leaves the Call Stack entirely**.
+* The Call Stack is now at **0 MB / empty**, ready for Request 2.
+
+
+### What Actually Happens When 16 Requests Hit at the Same Time?
+
+Here is the exact step-by-step breakdown of how Node.js and your operating system handle 16 simultaneous requests, even if each request allocates 2 MB of memory on the Heap.
+
+```
+16 Requests arrive simultaneously at the network port
+                      │
+                      ▼
+        [ OS Socket Queue / Backlog ]
+   (Holds all 16 incoming TCP connections)
+                      │
+                      ▼
+         [ Node.js Event Loop Queue ]
+                      │
+                      ▼
+             [ The Call Stack ]
+     Executes ONE synchronous slice at a time:
+     Req 1 -> dispatches I/O -> clears stack
+     Req 2 -> dispatches I/O -> clears stack
+     ...
+     Req 16 -> dispatches I/O -> clears stack
+                      │
+                      ▼
+             [ V8 Memory Heap ]
+    Allocates 16 × 2 MB = 32 MB of dynamic memory
+    (Well within standard 2-4 GB limit)
+```
+
+#### Step 1: The OS holds them in the Socket Backlog
+
+When 16 requests arrive at the exact same millisecond:
+
+* They don't immediately run in JavaScript.
+* The Operating System puts them in the **TCP Socket Backlog queue** (a kernel-level buffer that can hold hundreds or thousands of pending connections).
+
+#### Step 2: The Event Loop pulls them in one by one
+
+* **Request 1**: The event loop takes Req 1 off the network socket.
+  * It executes its Express middlewares and controller on the Call Stack.
+  * Req 1 allocates **2 MB on the Heap** (e.g., parsing a payload).
+  * It hits an `await` (Prisma/MongoDB query) and fires the non-blocking network call.
+  * **Req 1 completely exits the Call Stack.**
+* **Request 2**: The event loop immediately pushes Req 2 onto the empty Call Stack.
+  * It allocates another **2 MB on the Heap**.
+  * It fires its database query and exits the Call Stack.
+* **Requests 3 through 16**: This exact process repeats in rapid succession.
+
+Because executing synchronous JavaScript takes only a few microseconds ($\approx 0.05\text{ms}$ per request):
+
+* It takes Node.js **less than 1 millisecond** to cycle all 16 requests through the Call Stack and hand their database calls over to the OS.
+
+#### Step 3: The Memory Reality (The Heap, not the Stack)
+
+* **Call Stack usage**: Never exceeds a few kilobytes at any point, because it only held one request at a time.
+* **Heap usage**: All 16 requests are now waiting concurrently for MongoDB, each holding 2 MB in memory:
+  $$\text{Total Memory Used} = 16 \times 2\text{ MB} = 32\text{ MB on the Heap}$$
+* Since Node's default heap limit is around **2,048 MB (2 GB)** on a 64-bit machine, 32 MB is a tiny fraction (~1.5%) of available memory.
+
+### What *Would* Cause the Server to Break?
+
+If your server were to fail under heavy traffic, it wouldn't be because of the Call Stack size. Failure usually stems from one of three real bottlenecks:
+
+1. **V8 Heap Out of Memory (OOM)**:
+   * If **2,000 requests** arrive at once and each holds 2 MB in memory waiting for a slow database, you need:
+     $$2000 \times 2\text{ MB} = 4\text{ GB of Heap}$$
+   * Node will hit its heap limit and crash with: `FATAL ERROR: Ineffective mark-compacts near heap limit Allocation failed - JavaScript heap out of memory`.
+2. **Call Stack Overflow (`RangeError`)**:
+   * The Call Stack only overflows if a single request enters an **infinite or extremely deep recursion** without pausing:
+
+     ```javascript
+     function loopForever() {
+       loopForever(); // Adds a frame on top of frame... BOOM! Stack overflow at ~10,000 calls
+     }
+     ```
+
+3. **Database Connection Pool Exhaustion**:
+   * When Prisma receives 16 simultaneous queries, it needs database connections. Prisma has a default connection pool limit (often around 10–15 connections).
+   * If all connections are busy, Request 11–16 simply wait in Prisma's internal queue until a database connection frees up.
+
+### Summary
+
+* **The Call Stack** executes requests **one at a time**, taking microseconds per request before clearing.
+* **Concurrent state** lives in the **Heap**, not the Stack.
+* When 16 requests hit simultaneously, the Call Stack processes their synchronous setup serially (taking < 1ms total), allocates **32 MB on the Heap**, and lets the Event Loop and OS handle all 16 database operations concurrently.
+
+***
