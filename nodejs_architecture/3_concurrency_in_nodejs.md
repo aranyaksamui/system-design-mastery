@@ -4,7 +4,6 @@ To understand how Node.js handles 3 simultaneous requests, think of Node.js as a
 
 Traditional servers (like Apache or older Java Tomcat) spawn **3 separate threads** on 3 CPU cores to handle 3 requests. Node.js handles all 3 on **a single main JavaScript thread**.
 
-
 ### The Key Terminologies You Need to Know
 
 * **Concurrency**: Managing multiple tasks at the same time by interleaving them. It is *not* running them at the exact same physical nanosecond (which is *Parallelism*), but rather progressing on multiple tasks by never sitting idle.
@@ -14,7 +13,6 @@ Traditional servers (like Apache or older Java Tomcat) spawn **3 separate thread
 * **The Event Loop**: A continuous loop that asks: *"Is the Call Stack empty? If yes, is there a finished task waiting in the queue to be executed?"*
 * **The Callback / Task Queue**: The waiting line where finished I/O operations place their JavaScript callbacks to be picked up by the Event Loop.
 
-
 ### The Scenario
 
 Imagine 3 clients hit your Express server at the **exact same millisecond ($T = 0\text{ms}$)**:
@@ -22,7 +20,6 @@ Imagine 3 clients hit your Express server at the **exact same millisecond ($T = 
 * **Request 1 (Req A)**: `GET /users/1` $\rightarrow$ Queries MongoDB via Prisma (takes **30ms** to fetch data).
 * **Request 2 (Req B)**: `GET /users/2` $\rightarrow$ Queries MongoDB via Prisma (takes **15ms** to fetch data).
 * **Request 3 (Req C)**: `GET /health` $\rightarrow$ Checks server health, purely in-memory (takes **0ms** I/O, purely CPU).
-
 
 ### Step-by-Step Chronological Execution
 
@@ -87,13 +84,11 @@ Imagine 3 clients hit your Express server at the **exact same millisecond ($T = 
 * **Req C finishes and returns its response to Client C at $T = 1.0\text{ms}$.**
 * Notice: **Client C received their answer in 1ms**, even though they arrived *at the same time* as Req A and Req B.
 
-
 ### Meanwhile in the Background ($T = 1.0\text{ms} \dots 15\text{ms}$)
 
 * The Call Stack is idle.
 * MongoDB is concurrently executing the two queries in its own database processes.
 * Node's main thread consumes zero CPU while waiting for these network packets.
-
 
 ### Returning the Responses
 
@@ -139,7 +134,6 @@ MongoDB finishes Req A (30ms) ──> Event placed in Microtask/Callback Queue
 
 * **Client A receives their data at $T \approx 30.2\text{ms}$.**
 
-
 ### Timeline Overview
 
 | Time | Action | State of Call Stack |
@@ -156,7 +150,6 @@ MongoDB finishes Req A (30ms) ──> Event placed in Microtask/Callback Queue
 | **$30.1\text{ms}$** | Event loop moves Req A callback to Stack. | Executing Req A response |
 | **$30.2\text{ms}$** | **Req A Completed & Sent!** | Cleared |
 
-
 ### The Golden Rule to Remember
 
 This architecture makes Node.js **extremely fast for I/O tasks** because the single thread only directs traffic—it never waits around for the database or network to reply.
@@ -170,7 +163,6 @@ However, if you put a heavy computation on the Call Stack (such as an infinite l
 Your question touches on the exact boundary where many developers get confused about memory and execution: **the difference between the Call Stack, the Heap, and how concurrency actually works.**
 
 There is a fundamental misconception in the premise, but walking through it directly will clarify how Node.js actually handles those 16 simultaneous requests.
-
 
 ### The Fundamental Misconception
 
@@ -203,7 +195,6 @@ Two key reasons explain why this happens:
 
 * When Request 1 arrives and triggers a database query (`await prisma.user.find(...)`), **Request 1 leaves the Call Stack entirely**.
 * The Call Stack is now at **0 MB / empty**, ready for Request 2.
-
 
 ### What Actually Happens When 16 Requests Hit at the Same Time?
 
